@@ -6,6 +6,7 @@
 - エディタ: CodeMirror 6 + `@nextjournal/lang-clojure`（import map で全パッケージのバージョンを固定）
 - 実行: Run ボタン / `Ctrl+Enter`（macOS は `Cmd+Enter`）
 - 共有: Share でコードを `deflate-raw` 圧縮 + base64url して URL ハッシュ (`#z=...`) に格納し、リンクをコピー
+- スマホ（幅 800px 以下）: 下部に Code/Output タブと Run ボタン、編集中はキーボード直上に記号キー行（`( [ { " :` 、カーソル移動、インデント、Undo/Redo、フォーム選択拡張）
 - 最後に編集したコードは `localStorage` に保存（共有リンクで開いた場合はリンクの内容が優先）
 
 ## ローカル確認
