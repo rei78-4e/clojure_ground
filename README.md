@@ -14,7 +14,7 @@
 python3 -m http.server 8000   # http://localhost:8000
 ```
 
-## Cloudflare Pages へのデプロイ (play.rei78.cc)
+## Cloudflare Pages へのデプロイ (cplay.rei78.cc)
 
 ### A. Git 連携（push で自動デプロイ）
 
@@ -24,14 +24,14 @@ python3 -m http.server 8000   # http://localhost:8000
    - Build command: 空欄
    - Build output directory: `/`
 3. **Save and Deploy**
-4. 作成したプロジェクト → **Custom domains** → **Set up a custom domain** → `play.rei78.cc`
+4. 作成したプロジェクト → **Custom domains** → **Set up a custom domain** → `cplay.rei78.cc`
    - `rei78.cc` が同じアカウントの Cloudflare DNS にあるため、CNAME レコードは自動で作成される
 
 ### B. Wrangler で直接アップロード
 
 ```sh
-npx wrangler pages project create clojure-playground --production-branch main
+npx wrangler pages project create clojure-playground --production-branch master
 npx wrangler pages deploy . --project-name clojure-playground
 ```
 
-その後、A の手順 4 と同様にカスタムドメイン `play.rei78.cc` を追加する。
+その後、A の手順 4 と同様にカスタムドメイン `cplay.rei78.cc` を追加する。
