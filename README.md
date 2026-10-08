@@ -14,24 +14,24 @@
 python3 -m http.server 8000   # http://localhost:8000
 ```
 
-## Cloudflare Pages へのデプロイ (cplay.rei78.cc)
+## Cloudflare Workers へのデプロイ (cplay.rei78.cc)
 
-### A. Git 連携（push で自動デプロイ）
+Workers の Static Assets で `index.html` をそのまま配信する。設定は `wrangler.jsonc`、公開から除外するファイルは `.assetsignore` に記述済み。
 
-1. Cloudflare ダッシュボード → **Workers & Pages** → **Create** → **Pages** → **Connect to Git**
-2. このリポジトリを選択し、ビルド設定を次のようにする
-   - Framework preset: `None`
-   - Build command: 空欄
-   - Build output directory: `/`
-3. **Save and Deploy**
-4. 作成したプロジェクト → **Custom domains** → **Set up a custom domain** → `cplay.rei78.cc`
-   - `rei78.cc` が同じアカウントの Cloudflare DNS にあるため、CNAME レコードは自動で作成される
-
-### B. Wrangler で直接アップロード
+### A. Wrangler で直接デプロイ
 
 ```sh
-npx wrangler pages project create clojure-playground --production-branch master
-npx wrangler pages deploy . --project-name clojure-playground
+npx wrangler login
+npx wrangler deploy
 ```
 
-その後、A の手順 4 と同様にカスタムドメイン `cplay.rei78.cc` を追加する。
+`routes` の `custom_domain: true` により、`cplay.rei78.cc` の DNS レコードと証明書は自動で作成される（`rei78.cc` が同じ Cloudflare アカウントにあることが前提）。
+
+### B. Git 連携（push で自動デプロイ）
+
+1. Cloudflare ダッシュボード → **Workers & Pages** → **Create** → **Import a repository**
+2. このリポジトリを選択し、次のように設定する
+   - Build command: 空欄
+   - Deploy command: `npx wrangler deploy`
+   - Production branch: `master`
+3. **Deploy**

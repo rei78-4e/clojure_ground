@@ -1,0 +1,8 @@
+{
+  "name": "clojure-playground",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "." },
+  "routes": [
+    { "pattern": "cplay.rei78.cc", "custom_domain": true }
+  ]
+}
