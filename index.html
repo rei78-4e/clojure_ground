@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Clojure(Script) playground in the browser, powered by Scittle.">
+<title>Clojure Playground</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%235881d8'/%3E%3Cpath d='M16 4a12 12 0 0 1 0 24' fill='%2363b132'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --border: #d9dde3;
+    --text: #1d2330;
+    --muted: #667085;
+    --accent: #3f6fd8;
+    --accent-text: #ffffff;
+    --ok: #2f7d32;
+    --err: #c62828;
+    --err-bg: #fdecec;
+    --result: #3f6fd8;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d;
+      --panel: #21252b;
+      --border: #343a44;
+      --text: #d7dae0;
+      --muted: #8b93a1;
+      --accent: #6b9cff;
+      --accent-text: #0d1117;
+      --ok: #7cc47f;
+      --err: #ff7b72;
+      --err-bg: #3a1f22;
+      --result: #8ab4ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  h1 { font-size: 16px; margin: 0 auto 0 0; white-space: nowrap; }
+  h1 small { color: var(--muted); font-weight: normal; }
+  select, button {
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    min-height: 34px;
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: progress; }
+  kbd { font: 11px var(--mono); opacity: .8; }
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    min-height: 0;
+  }
+  .pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .pane + .pane { border-left: 1px solid var(--border); }
+  .pane-title {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 12px; min-height: 33px;
+    font-size: 12px; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .pane-title span:first-child { margin-right: auto; text-transform: uppercase; letter-spacing: .05em; }
+  .pane-title button { min-height: 24px; padding: 2px 8px; font-size: 12px; }
+  #editor { flex: 1; min-height: 0; overflow: hidden; background: var(--panel); }
+  #editor .cm-editor { height: 100%; font-size: 14px; }
+  #editor .cm-scroller { font-family: var(--mono); }
+  #editor .cm-error-line { background: color-mix(in srgb, var(--err) 18%, transparent); }
+  #output-wrap { flex: 1; min-height: 0; overflow: auto; background: var(--panel); }
+  #stage:not(:empty) { padding: 12px; border-bottom: 1px dashed var(--border); }
+  #out {
+    margin: 0; padding: 12px;
+    font: 13px/1.5 var(--mono);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #out .stdout { color: var(--text); }
+  #out .stderr { color: var(--err); }
+  #out .result { color: var(--result); }
+  #out .result::before { content: "=> "; color: var(--muted); }
+  #out .note { color: var(--muted); font-style: italic; }
+  #out .error {
+    display: block; color: var(--err); background: var(--err-bg);
+    border-left: 3px solid var(--err); padding: 6px 10px; margin: 4px 0; border-radius: 4px;
+  }
+  #out .error button {
+    font: inherit; font-size: 12px; min-height: 0; padding: 1px 6px; margin-left: 6px;
+    color: var(--err); background: transparent; border-color: var(--err);
+  }
+  #status { font-size: 12px; color: var(--muted); }
+  #status.ok { color: var(--ok); }
+  #status.bad { color: var(--err); }
+  #toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100vw - 32px);
+  }
+  #toast.show { opacity: 1; }
+  @media (max-width: 800px) {
+    main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(45dvh, 1fr) minmax(30dvh, auto); }
+    .pane + .pane { border-left: 0; border-top: 1px solid var(--border); }
+    #editor .cm-editor { font-size: 16px; } /* >= 16px prevents iOS focus zoom */
+    h1 { width: 100%; }
+    header select { flex: 1; min-width: 0; }
+    .hide-sm { display: none; }
+  }
+</style>
+
+<!-- Scittle (pinned). Plain scripts: loaded before the module below runs. -->
+<script src="https://cdn.jsdelivr.net/npm/scittle@0.8.33/dist/scittle.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/scittle@0.8.33/dist/scittle.pprint.js" crossorigin="anonymous"></script>
+
+<!-- CodeMirror 6 as native ES modules, every package pinned to an exact version
+     so that only one copy of @codemirror/state and friends is ever loaded. -->
+<script type="importmap">
+{
+  "imports": {
+    "@codemirror/state": "https://cdn.jsdelivr.net/npm/@codemirror/state@6.7.6/dist/index.js",
+    "@codemirror/view": "https://cdn.jsdelivr.net/npm/@codemirror/view@6.43.14/dist/index.js",
+    "@codemirror/commands": "https://cdn.jsdelivr.net/npm/@codemirror/commands@6.11.1/dist/index.js",
+    "@codemirror/language": "https://cdn.jsdelivr.net/npm/@codemirror/language@6.13.1/dist/index.js",
+    "@codemirror/autocomplete": "https://cdn.jsdelivr.net/npm/@codemirror/autocomplete@6.20.3/dist/index.js",
+    "@codemirror/streamparser": "https://cdn.jsdelivr.net/npm/@codemirror/streamparser@6.0.0/dist/index.js",
+    "@codemirror/theme-one-dark": "https://cdn.jsdelivr.net/npm/@codemirror/theme-one-dark@6.1.3/dist/index.js",
+    "@lezer/common": "https://cdn.jsdelivr.net/npm/@lezer/common@1.5.3/dist/index.js",
+    "@lezer/highlight": "https://cdn.jsdelivr.net/npm/@lezer/highlight@1.2.5/dist/index.js",
+    "@lezer/lr": "https://cdn.jsdelivr.net/npm/@lezer/lr@1.4.11/dist/index.js",
+    "@nextjournal/lang-clojure": "https://cdn.jsdelivr.net/npm/@nextjournal/lang-clojure@1.0.0/dist/index.js",
+    "@nextjournal/lezer-clojure": "https://cdn.jsdelivr.net/npm/@nextjournal/lezer-clojure@1.0.0/dist/index.es.js",
+    "@marijn/find-cluster-break": "https://cdn.jsdelivr.net/npm/@marijn/find-cluster-break@1.0.4/src/index.js",
+    "style-mod": "https://cdn.jsdelivr.net/npm/style-mod@4.1.4/src/style-mod.js",
+    "w3c-keyname": "https://cdn.jsdelivr.net/npm/w3c-keyname@2.2.8/index.js",
+    "crelt": "https://cdn.jsdelivr.net/npm/crelt@1.0.7/index.js"
+  }
+}
+</script>
+</head>
+<body>
+<header>
+  <h1>Clojure Playground <small>· Scittle 0.8.33</small></h1>
+  <select id="examples" aria-label="Example snippets">
+    <option value="" disabled selected>Examples…</option>
+  </select>
+  <button id="share" type="button" title="Copy a link containing this code">Share</button>
+  <button id="run" class="primary" type="button" disabled title="Run (Ctrl/Cmd+Enter)">
+    Run <kbd class="hide-sm">Ctrl/⌘+Enter</kbd>
+  </button>
+</header>
+
+<main>
+  <section class="pane" aria-label="Editor">
+    <div class="pane-title"><span>Editor</span><span id="status">Loading…</span></div>
+    <div id="editor"></div>
+  </section>
+  <section class="pane" aria-label="Output">
+    <div class="pane-title"><span>Output</span><button id="clear" type="button">Clear</button></div>
+    <div id="output-wrap">
+      <div id="stage"></div>
+      <pre id="out" aria-live="polite"></pre>
+    </div>
+  </section>
+</main>
+<div id="toast" role="status"></div>
+
+<script type="module">
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter,
+         drawSelection, Decoration } from "@codemirror/view";
+import { EditorState, Compartment, StateField, StateEffect, Prec } from "@codemirror/state";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentOnInput } from "@codemirror/language";
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { oneDark } from "@codemirror/theme-one-dark";
+import { clojure } from "@nextjournal/lang-clojure";
+
+// ---------------------------------------------------------------- examples
+const EXAMPLES = {
+  "Basics": `;; Basics: values, functions, let and conditionals
+(defn greet [name]
+  (str "Hello, " name "!"))
+
+(println (greet "Clojure"))
+
+(defn fizzbuzz [n]
+  (cond
+    (zero? (mod n 15)) "FizzBuzz"
+    (zero? (mod n 3))  "Fizz"
+    (zero? (mod n 5))  "Buzz"
+    :else n))
+
+(println (map fizzbuzz (range 1 16)))
+
+;; The value of the last form is shown as the result
+(let [x 10
+      y 32]
+  (+ x y))
+`,
+  "Collections": `;; Collections: vectors, maps, sets and sequence functions
+(def people
+  [{:name "Ada"   :lang :clojure :age 36}
+   {:name "Rich"  :lang :clojure :age 52}
+   {:name "Grace" :lang :cobol   :age 85}
+   {:name "Alan"  :lang :lisp    :age 41}])
+
+(println "names:" (mapv :name people))
+(println "langs:" (set (map :lang people)))
+
+(prn (->> people
+          (filter #(> (:age %) 40))
+          (sort-by :age)
+          (map (juxt :name :age))))
+
+(let [{:keys [name age]} (first people)]
+  (println name "is" age))
+
+(println (frequencies "mississippi"))
+(println (update-in {:a {:b 1}} [:a :b] inc))
+
+;; group-by returns a map of key -> vector
+(update-vals (group-by :lang people) #(mapv :name %))
+`,
+  "Atoms": `;; Atoms: managed, synchronous state
+(def counter (atom 0))
+
+(add-watch counter :log
+  (fn [_ _ old new]
+    (println "counter:" old "->" new)))
+
+(swap! counter inc)
+(swap! counter + 10)
+(reset! counter 100)
+
+;; A validator rejects invalid states
+(def balance (atom 50 :validator #(>= % 0)))
+
+(defn withdraw! [amount]
+  (try
+    (swap! balance - amount)
+    (println "withdrew" amount "-> balance" @balance)
+    (catch :default _
+      (println "rejected withdrawal of" amount))))
+
+(withdraw! 30)
+(withdraw! 30)
+
+{:counter @counter :balance @balance}
+`,
+  "core.async-style loops": `;; core.async is not bundled with Scittle, so this emulates a
+;; go-loop producer/consumer with a tiny channel built on Promises.
+(defn timeout [ms]
+  (js/Promise. (fn [resolve] (js/setTimeout resolve ms))))
+
+(defn chan [] (atom {:buf [] :takers []}))
+
+(defn put! [ch v]
+  (if-let [taker (first (:takers @ch))]
+    (do (swap! ch update :takers subvec 1)
+        (taker v))
+    (swap! ch update :buf conj v)))
+
+(defn take! [ch]
+  (js/Promise.
+    (fn [resolve]
+      (if-let [[v] (seq (:buf @ch))]
+        (do (swap! ch update :buf subvec 1)
+            (resolve v))
+        (swap! ch update :takers conj resolve)))))
+
+;; "go-loop": each step waits on a Promise, then recurs
+(defn producer [ch n]
+  (letfn [(step [i]
+            (if (< i n)
+              (do (println "put" i)
+                  (put! ch i)
+                  (.then (timeout 300) (fn [_] (step (inc i)))))
+              (put! ch :done)))]
+    (step 0)))
+
+(defn consumer [ch acc]
+  (.then (take! ch)
+         (fn [v]
+           (if (= v :done)
+             (do (println "consumer done") acc)
+             (do (println "  took" v)
+                 (consumer ch (conj acc (* v v))))))))
+
+(def ch (chan))
+(producer ch 5)
+;; A Promise result is awaited and its value shown when it resolves
+(consumer ch [])
+`,
+  "DOM manipulation": `;; DOM: build elements inside the #stage area above the output
+(def stage (.getElementById js/document "stage"))
+(set! (.-innerHTML stage) "")
+
+(defn el [tag attrs & children]
+  (let [node (.createElement js/document tag)]
+    (doseq [[k v] attrs]
+      (if (= k :style)
+        (set! (.. node -style -cssText) v)
+        (.setAttribute node (name k) v)))
+    (doseq [c children]
+      (.append node (if (string? c) (.createTextNode js/document c) c)))
+    node))
+
+(def clicks (atom 0))
+(def label (el "span" {:style "margin-left:8px"} "clicked 0 times"))
+
+(def button
+  (el "button" {:type "button"} "Click me"))
+
+(.addEventListener button "click"
+  (fn [_]
+    (swap! clicks inc)
+    (set! (.-textContent label) (str "clicked " @clicks " times"))
+    (println "click" @clicks)))
+
+(def swatches
+  (apply el "div" {:style "display:flex;gap:6px;margin-top:10px"}
+    (for [hue (range 0 360 45)]
+      (el "div" {:title (str "hue " hue)
+                 :style (str "width:28px;height:28px;border-radius:50%;"
+                             "background:hsl(" hue ",70%,55%)")}))))
+
+(.append stage (el "h3" {:style "margin:0 0 8px"} "Hello from ClojureScript")
+                (el "div" {} button label)
+                swatches)
+
+(str "children in #stage: " (.-childElementCount stage))
+`
+};
+
+// ------------------------------------------------------------- dom helpers
+const $ = (id) => document.getElementById(id);
+const outEl = $("out"), stageEl = $("stage"), statusEl = $("status"), runBtn = $("run");
+
+function setStatus(text, cls = "") { statusEl.textContent = text; statusEl.className = cls; }
+
+let toastTimer;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+function scrollOut() { const w = $("output-wrap"); w.scrollTop = w.scrollHeight; }
+
+// Consecutive stdout chunks are merged into one text node.
+let lastSpan = null;
+function write(text, cls) {
+  if (lastSpan && lastSpan.dataset.cls === cls && cls !== "result") {
+    lastSpan.textContent += text;
+  } else {
+    lastSpan = document.createElement("span");
+    lastSpan.dataset.cls = cls;
+    lastSpan.className = cls;
+    lastSpan.textContent = text;
+    outEl.append(lastSpan);
+  }
+  scrollOut();
+}
+function writeLine(text, cls) {
+  if (outEl.textContent && !outEl.textContent.endsWith("\n")) write("\n", "stdout");
+  write(text + "\n", cls);
+  lastSpan = null;
+}
+function clearOutput() { outEl.textContent = ""; lastSpan = null; }
+
+// --------------------------------------------------------------- scittle
+const evalString = (src) => scittle.core.eval_string(src);
+
+// Route println/prn (and *print-err-fn*) to the output panel. Set globally so
+// that output from timers, promises and event handlers is captured too.
+window.__play = { out: (s, kind) => write(s, kind === "err" ? "stderr" : "stdout") };
+let fmt, errInfo;
+function bootScittle() {
+  evalString(`
+(ns playground.internal
+  (:require [cljs.pprint :as pp]))
+
+(set! *print-newline* true)
+(set! *print-fn* (fn [& xs] (.out js/window.__play (apply str xs) "out")))
+(set! *print-err-fn* (fn [& xs] (.out js/window.__play (apply str xs) "err")))
+
+(defn fmt [v]
+  (let [s (pr-str v)]
+    (if (and (> (count s) 72) (coll? v))
+      (-> (with-out-str (pp/pprint v))
+          (.replace (js/RegExp. " +$" "gm") "")
+          (.trimEnd))
+      s)))
+
+(defn- user-data
+  "ex-data from the user's own ex-info, ignoring SCI/reader metadata."
+  [m]
+  (when (and (map? m) (not (#{"sci" "sci.error" "edamame"} (some-> (:type m) namespace))))
+    m))
+
+(defn err-info [e]
+  (let [d     (ex-data e)
+        cause (ex-cause e)
+        user  (or (user-data (some-> cause ex-data)) (user-data d))]
+    #js {:message (or (some-> cause ex-message) (ex-message e) (str e))
+         :line    (:line d)
+         :column  (:column d)
+         :phase   (some-> (:phase d) name)
+         :data    (when (seq user) (pr-str user))}))
+`);
+  fmt = evalString("playground.internal/fmt");
+  errInfo = evalString("playground.internal/err-info");
+}
+
+function safeFmt(v) { try { return fmt(v); } catch { return String(v); } }
+
+function showError(e) {
+  let info;
+  try { info = errInfo(e); } catch { info = { message: String(e && e.message || e) }; }
+  const box = document.createElement("span");
+  box.className = "error";
+  const where = info.line ? ` (line ${info.line}${info.column ? `, col ${info.column}` : ""})` : "";
+  box.append(`${info.phase === "parse" ? "Syntax error" : "Error"}${where}: ${info.message}`);
+  if (info.data) box.append(`\n${info.data}`);
+  if (info.line) {
+    const go = document.createElement("button");
+    go.type = "button"; go.textContent = "Go to line";
+    go.onclick = () => gotoLine(info.line, info.column);
+    box.append(go);
+    markErrorLine(info.line);
+  }
+  if (outEl.textContent && !outEl.textContent.endsWith("\n")) write("\n", "stdout");
+  outEl.append(box);
+  lastSpan = null;
+  scrollOut();
+}
+
+// Errors thrown later, from timers or event handlers created by user code
+window.addEventListener("error", (ev) => { if (fmt) showError(ev.error || ev.message); });
+window.addEventListener("unhandledrejection", (ev) => { if (fmt) showError(ev.reason); });
+
+let runCount = 0;
+function run() {
+  if (!fmt) return;
+  const code = view.state.doc.toString();
+  const id = ++runCount;
+  clearOutput();
+  stageEl.replaceChildren();
+  markErrorLine(null);
+  const t0 = performance.now();
+  try {
+    evalString("(in-ns 'user)");
+    const value = evalString(code);
+    const ms = Math.round(performance.now() - t0);
+    if (value instanceof Promise) {
+      writeLine("Promise pending…", "note");
+      setStatus(`Running async… ${ms} ms`);
+      value.then(
+        (v) => { writeLine(safeFmt(v), "result"); if (id === runCount) setStatus("Done", "ok"); },
+        (e) => { showError(e); if (id === runCount) setStatus("Error", "bad"); });
+    } else {
+      writeLine(safeFmt(value), "result");
+      setStatus(`Done in ${ms} ms`, "ok");
+    }
+  } catch (e) {
+    showError(e);
+    setStatus("Error", "bad");
+  }
+}
+
+// ---------------------------------------------------------------- editor
+const setErrorLine = StateEffect.define();
+const errorLineField = StateField.define({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    for (const e of tr.effects) if (e.is(setErrorLine)) {
+      if (e.value == null || e.value > tr.state.doc.lines) return Decoration.none;
+      const line = tr.state.doc.line(e.value);
+      return Decoration.set([Decoration.line({ class: "cm-error-line" }).range(line.from)]);
+    }
+    return tr.docChanged ? Decoration.none : deco;
+  },
+  provide: (f) => EditorView.decorations.from(f)
+});
+function markErrorLine(n) { view.dispatch({ effects: setErrorLine.of(n) }); }
+
+function gotoLine(n, col = 1) {
+  const line = view.state.doc.line(Math.min(n, view.state.doc.lines));
+  const pos = Math.min(line.from + Math.max(col - 1, 0), line.to);
+  view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "center" }) });
+  view.focus();
+}
+
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+const themeConf = new Compartment();
+const themeFor = (dark) => dark ? oneDark : syntaxHighlighting(defaultHighlightStyle, { fallback: true });
+
+const DRAFT_KEY = "clojure-playground:draft";
+let saveTimer;
+const saveDraft = EditorView.updateListener.of((u) => {
+  if (!u.docChanged) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { try { localStorage.setItem(DRAFT_KEY, u.state.doc.toString()); } catch {} }, 400);
+});
+
+const view = new EditorView({
+  parent: $("editor"),
+  state: EditorState.create({
+    doc: "",
+    extensions: [
+      Prec.highest(keymap.of([{ key: "Mod-Enter", run: () => { run(); return true; } }])),
+      lineNumbers(), highlightActiveLineGutter(), highlightActiveLine(),
+      history(), drawSelection(), indentOnInput(), bracketMatching(), closeBrackets(),
+      keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+      clojure(),
+      themeConf.of(themeFor(darkQuery.matches)),
+      errorLineField, saveDraft,
+      EditorView.contentAttributes.of({ "aria-label": "Clojure code", autocapitalize: "off", autocorrect: "off", spellcheck: "false" })
+    ]
+  })
+});
+darkQuery.addEventListener("change", (e) => view.dispatch({ effects: themeConf.reconfigure(themeFor(e.matches)) }));
+
+function setCode(code) {
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: code }, selection: { anchor: 0 } });
+}
+
+// ---------------------------------------------------------------- sharing
+// Hash format: #z=<base64url(deflate-raw(utf8))>, or #s=<base64url(utf8)>
+// when the browser lacks CompressionStream.
+function toB64u(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function fromB64u(s) {
+  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+const pipe = async (bytes, stream) =>
+  new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+
+async function encodeCode(code) {
+  const bytes = new TextEncoder().encode(code);
+  if (typeof CompressionStream === "function") return "z=" + toB64u(await pipe(bytes, new CompressionStream("deflate-raw")));
+  return "s=" + toB64u(bytes);
+}
+async function decodeHash(hash) {
+  const m = /^#?([zs])=(.+)$/.exec(hash);
+  if (!m) return null;
+  let bytes = fromB64u(m[2]);
+  if (m[1] === "z") bytes = await pipe(bytes, new DecompressionStream("deflate-raw"));
+  return new TextDecoder().decode(bytes);
+}
+
+async function share() {
+  const hash = await encodeCode(view.state.doc.toString());
+  window.history.replaceState(null, "", "#" + hash);
+  const url = location.href;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast(`Link copied (${url.length} chars)`);
+  } catch {
+    toast("Link is in the address bar");
+  }
+}
+
+async function loadFromHash() {
+  try {
+    const code = await decodeHash(location.hash);
+    if (code != null) { setCode(code); return true; }
+  } catch (e) {
+    writeLine("Could not decode the shared link: " + e.message, "stderr");
+  }
+  return false;
+}
+
+// ------------------------------------------------------------------ wiring
+const select = $("examples");
+for (const name of Object.keys(EXAMPLES)) select.append(new Option(name, name));
+select.addEventListener("change", () => {
+  setCode(EXAMPLES[select.value]);
+  if (location.hash) window.history.replaceState(null, "", location.pathname + location.search);
+  select.selectedIndex = 0;
+  view.focus();
+});
+
+runBtn.addEventListener("click", run);
+$("share").addEventListener("click", share);
+$("clear").addEventListener("click", () => { clearOutput(); stageEl.replaceChildren(); markErrorLine(null); });
+window.addEventListener("hashchange", loadFromHash);
+// Ctrl/Cmd+Enter also works when focus is outside the editor
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !view.hasFocus) { e.preventDefault(); run(); }
+});
+
+if (!(await loadFromHash())) {
+  let draft = null;
+  try { draft = localStorage.getItem(DRAFT_KEY); } catch {}
+  setCode(draft || EXAMPLES["Basics"]);
+}
+
+if (window.scittle) {
+  try {
+    bootScittle();
+    runBtn.disabled = false;
+    setStatus("Ready");
+  } catch (e) {
+    setStatus("Scittle failed to start", "bad");
+    writeLine(String(e), "stderr");
+  }
+} else {
+  setStatus("Scittle failed to load", "bad");
+  writeLine("Could not load Scittle from the CDN. Check your connection and reload.", "stderr");
+}
+</script>
+</body>
+</html>
