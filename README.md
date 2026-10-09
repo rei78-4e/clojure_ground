@@ -28,6 +28,8 @@ npx wrangler login
 npx wrangler deploy
 ```
 
+この方法ではフッターのビルド表記は `dev` になる。
+
 `routes` の `custom_domain: true` により、`cplay.rei78.cc` の DNS レコードと証明書は自動で作成される（`rei78.cc` が同じ Cloudflare アカウントにあることが前提）。
 
 ### B. Git 連携（push で自動デプロイ）
@@ -35,6 +37,16 @@ npx wrangler deploy
 1. Cloudflare ダッシュボード → **Workers & Pages** → **Create** → **Import a repository**
 2. このリポジトリを選択し、次のように設定する
    - Build command: 空欄
-   - Deploy command: `npx wrangler deploy`
+   - Deploy command（フッターにコミットハッシュを埋め込む）:
+     ```sh
+     sed -i "s/__COMMIT__/$(echo "$WORKERS_CI_COMMIT_SHA" | cut -c1-7)/" index.html && npx wrangler deploy
+     ```
    - Production branch: `master`
 3. **Deploy**
+
+## バージョン表記
+
+フッター（スマホでは Output の末尾）に `cplay v<版> (<コミット>)` を表示する。
+
+- 版: `index.html` の `APP_VERSION` を手動で更新する
+- コミット: `BUILD = "__COMMIT__"` を上記 Deploy command がビルド時に置換する。置換されていなければ `dev`

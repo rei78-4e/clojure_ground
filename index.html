@@ -126,6 +126,9 @@
     opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100vw - 32px);
   }
   #toast.show { opacity: 1; }
+  .ver { font-size: 11px; color: var(--muted); }
+  #footer { padding: 3px 12px; border-top: 1px solid var(--border); background: var(--panel); }
+  .ver-m { display: none; }
   #tabbar, #keybar { display: none; }
 
   /* ---- phone layout: one pane at a time, controls at the bottom (thumb reach) */
@@ -151,6 +154,10 @@
     #out { font-size: 14px; }
     #out .error button { min-height: 32px; padding: 4px 10px; margin: 6px 0 0; display: block; }
     #toast { bottom: calc(72px + env(safe-area-inset-bottom)); }
+    /* the bottom edge belongs to the tab bar; the version goes under the output instead */
+    #footer { display: none; }
+    #output-wrap { display: flex; flex-direction: column; }
+    .ver-m { display: block; margin-top: auto; padding: 16px 12px 10px; }
 
     #tabbar {
       display: flex; align-items: center; gap: 8px;
@@ -215,7 +222,7 @@
 </head>
 <body data-view="code">
 <header>
-  <h1>Clojure<span class="hide-sm"> Playground</span> <small>· Scittle 0.8.33</small></h1>
+  <h1>Clojure<span class="hide-sm"> Playground</span></h1>
   <select id="examples" aria-label="Example snippets">
     <option value="" disabled selected>Examples…</option>
   </select>
@@ -236,9 +243,11 @@
     <div id="output-wrap">
       <div id="sandboxes"></div>
       <pre id="out" aria-live="polite"></pre>
+      <div class="ver ver-m"></div>
     </div>
   </section>
 </main>
+<footer class="ver" id="footer"></footer>
 <!-- phone only: symbol keys shown while the editor has focus -->
 <div id="keybar" aria-label="Extra keys">
   <button type="button" class="act" data-act="esc" title="Escape (normal mode)">Esc</button>
@@ -705,6 +714,16 @@ const themeFor = (dark) => dark ? oneDark : syntaxHighlighting(defaultHighlightS
 
 const wrapConf = new Compartment();
 const vimConf = new Compartment();
+
+// ---------------------------------------------------------------- version
+// APP_VERSION is bumped by hand. BUILD is replaced with the short commit hash by
+// the Cloudflare Workers Builds deploy command (see README); "dev" otherwise.
+const APP_VERSION = "0.5.0";
+const BUILD = "__COMMIT__";
+const build = /^[0-9a-f]{7,}$/.test(BUILD) ? BUILD : "dev";
+for (const el of document.querySelectorAll(".ver")) {
+  el.textContent = `cplay v${APP_VERSION} (${build}) · Scittle 0.8.33 · CodeMirror 6`;
+}
 
 const DRAFT_KEY = "clojure-playground:draft";
 let saveTimer;
