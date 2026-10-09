@@ -93,7 +93,9 @@
   #editor .cm-scroller { font-family: var(--mono); }
   #editor .cm-error-line { background: color-mix(in srgb, var(--err) 18%, transparent); }
   #output-wrap { flex: 1; min-height: 0; overflow: auto; background: var(--panel); }
-  #stage:not(:empty) { padding: 12px; border-bottom: 1px dashed var(--border); }
+  .sandbox { display: block; width: 100%; height: 0; border: 0; }
+  .sandbox[hidden] { display: none; }
+  .sandbox.has-content { border-bottom: 1px dashed var(--border); }
   #out {
     margin: 0; padding: 12px;
     font: 13px/1.5 var(--mono);
@@ -178,10 +180,6 @@
   }
 </style>
 
-<!-- Scittle (pinned). Plain scripts: loaded before the module below runs. -->
-<script src="https://cdn.jsdelivr.net/npm/scittle@0.8.33/dist/scittle.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/scittle@0.8.33/dist/scittle.pprint.js" crossorigin="anonymous"></script>
-
 <!-- CodeMirror 6 as native ES modules, every package pinned to an exact version
      so that only one copy of @codemirror/state and friends is ever loaded. -->
 <script type="importmap">
@@ -227,7 +225,7 @@
   <section class="pane" id="pane-output" aria-label="Output">
     <div class="pane-title"><span>Output</span><button id="clear" type="button">Clear</button></div>
     <div id="output-wrap">
-      <div id="stage"></div>
+      <div id="sandboxes"></div>
       <pre id="out" aria-live="polite"></pre>
     </div>
   </section>
@@ -248,6 +246,103 @@
   <button type="button" class="primary run" id="run-m" disabled>▶ Run</button>
 </nav>
 <div id="toast" role="status"></div>
+
+<!-- Document for the sandbox iframe. Every Run gets a fresh one and the previous
+     one is removed, which stops all of its timers, promises and listeners.
+     sandbox="allow-scripts" without allow-same-origin gives it an opaque origin,
+     so user code cannot touch this page; it talks to us via postMessage only. -->
+<template id="sandbox-src">
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<style>
+  body { margin: 0; display: flow-root; color: #1d2330; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  @media (prefers-color-scheme: dark) { body { color: #d7dae0; } }
+  #stage:not(:empty) { padding: 12px; }
+</style>
+<div id="stage"></div>
+<script src="https://cdn.jsdelivr.net/npm/scittle@0.8.33/dist/scittle.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/scittle@0.8.33/dist/scittle.pprint.js" crossorigin="anonymous"></script>
+<script>
+(() => {
+  const send = (m) => parent.postMessage(m, "*");
+  if (!window.scittle) return send({ t: "fatal", message: "Could not load Scittle from the CDN. Check your connection and reload." });
+  const evalString = (src) => scittle.core.eval_string(src);
+  window.__send = send;
+  let fmt, errInfo;
+  try {
+    evalString(`
+(ns playground.internal
+  (:require [cljs.pprint :as pp]))
+
+(set! *print-newline* true)
+(set! *print-fn* (fn [& xs] (js/__send #js {:t "out" :s (apply str xs)})))
+(set! *print-err-fn* (fn [& xs] (js/__send #js {:t "out" :s (apply str xs) :err true})))
+
+(defn fmt [v]
+  (let [s (pr-str v)]
+    (if (and (> (count s) 72) (coll? v))
+      (-> (with-out-str (pp/pprint v))
+          (.replace (js/RegExp. " +$" "gm") "")
+          (.trimEnd))
+      s)))
+
+(defn- user-data
+  "ex-data from the user's own ex-info, ignoring SCI/reader metadata."
+  [m]
+  (when (and (map? m) (not (#{"sci" "sci.error" "edamame"} (some-> (:type m) namespace))))
+    m))
+
+(defn err-info [e]
+  (let [d     (ex-data e)
+        cause (ex-cause e)
+        user  (or (user-data (some-> cause ex-data)) (user-data d))]
+    #js {:message (or (some-> cause ex-message) (ex-message e) (str e))
+         :line    (:line d)
+         :column  (:column d)
+         :phase   (some-> (:phase d) name)
+         :data    (when (seq user) (pr-str user))}))
+`);
+    fmt = evalString("playground.internal/fmt");
+    errInfo = evalString("playground.internal/err-info");
+  } catch (e) {
+    return send({ t: "fatal", message: "Scittle failed to start: " + e });
+  }
+  const safeFmt = (v) => { try { return fmt(v); } catch { return String(v); } };
+  const info = (e) => {
+    try { const i = errInfo(e); return { message: i.message, line: i.line, column: i.column, phase: i.phase, data: i.data }; }
+    catch { return { message: String((e && e.message) || e) }; }
+  };
+
+  // Errors thrown later, from timers or event handlers created by user code
+  addEventListener("error", (ev) => send({ t: "error", info: info(ev.error ?? ev.message) }));
+  addEventListener("unhandledrejection", (ev) => send({ t: "error", info: info(ev.reason) }));
+  addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send({ t: "run" }); }
+  });
+  new ResizeObserver(() => send({ t: "height", h: Math.ceil(document.body.getBoundingClientRect().height) }))
+    .observe(document.body);
+
+  addEventListener("message", (ev) => {
+    if (ev.source !== parent || !ev.data || ev.data.t !== "eval") return;
+    const t0 = performance.now();
+    try {
+      const value = evalString(ev.data.code);
+      const ms = Math.round(performance.now() - t0);
+      if (value instanceof Promise) {
+        send({ t: "pending", ms });
+        value.then((v) => send({ t: "result", s: safeFmt(v) }),
+                   (e) => send({ t: "error", info: info(e), final: true }));
+      } else {
+        send({ t: "result", s: safeFmt(value), ms });
+      }
+    } catch (e) {
+      send({ t: "error", info: info(e), final: true });
+    }
+  });
+  send({ t: "ready" });
+})();
+</script>
+</template>
 
 <script type="module">
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter,
@@ -419,7 +514,7 @@ const EXAMPLES = {
 
 // ------------------------------------------------------------- dom helpers
 const $ = (id) => document.getElementById(id);
-const outEl = $("out"), stageEl = $("stage"), statusEl = $("status"), runBtn = $("run");
+const outEl = $("out"), statusEl = $("status"), runBtn = $("run");
 
 function setStatus(text, cls = "") {
   for (const el of [statusEl, $("status-m")]) { el.textContent = text; el.className = cls; }
@@ -473,55 +568,28 @@ function writeLine(text, cls) {
 }
 function clearOutput() { outEl.textContent = ""; lastSpan = null; }
 
-// --------------------------------------------------------------- scittle
-const evalString = (src) => scittle.core.eval_string(src);
+// --------------------------------------------------------------- sandbox
+const SANDBOX_HTML = $("sandbox-src").innerHTML;
+let sandbox = null;   // iframe of the current run
+let spare = null;     // next iframe, loaded in advance so Run starts instantly
 
-// Route println/prn (and *print-err-fn*) to the output panel. Set globally so
-// that output from timers, promises and event handlers is captured too.
-window.__play = { out: (s, kind) => write(s, kind === "err" ? "stderr" : "stdout") };
-let fmt, errInfo;
-function bootScittle() {
-  evalString(`
-(ns playground.internal
-  (:require [cljs.pprint :as pp]))
-
-(set! *print-newline* true)
-(set! *print-fn* (fn [& xs] (.out js/window.__play (apply str xs) "out")))
-(set! *print-err-fn* (fn [& xs] (.out js/window.__play (apply str xs) "err")))
-
-(defn fmt [v]
-  (let [s (pr-str v)]
-    (if (and (> (count s) 72) (coll? v))
-      (-> (with-out-str (pp/pprint v))
-          (.replace (js/RegExp. " +$" "gm") "")
-          (.trimEnd))
-      s)))
-
-(defn- user-data
-  "ex-data from the user's own ex-info, ignoring SCI/reader metadata."
-  [m]
-  (when (and (map? m) (not (#{"sci" "sci.error" "edamame"} (some-> (:type m) namespace))))
-    m))
-
-(defn err-info [e]
-  (let [d     (ex-data e)
-        cause (ex-cause e)
-        user  (or (user-data (some-> cause ex-data)) (user-data d))]
-    #js {:message (or (some-> cause ex-message) (ex-message e) (str e))
-         :line    (:line d)
-         :column  (:column d)
-         :phase   (some-> (:phase d) name)
-         :data    (when (seq user) (pr-str user))}))
-`);
-  fmt = evalString("playground.internal/fmt");
-  errInfo = evalString("playground.internal/err-info");
+function makeSandbox() {
+  const f = document.createElement("iframe");
+  f.className = "sandbox";
+  f.title = "Program DOM output";
+  f.hidden = true;
+  f.setAttribute("sandbox", "allow-scripts allow-modals");
+  f.ready = new Promise((resolve, reject) => { f.resolveReady = resolve; f.rejectReady = reject; });
+  f.srcdoc = SANDBOX_HTML;
+  $("sandboxes").append(f);
+  return f;
 }
 
-function safeFmt(v) { try { return fmt(v); } catch { return String(v); } }
+function stopSandbox() {
+  if (sandbox) { sandbox.remove(); sandbox = null; }
+}
 
-function showError(e) {
-  let info;
-  try { info = errInfo(e); } catch { info = { message: String(e && e.message || e) }; }
+function showError(info) {
   const box = document.createElement("span");
   box.className = "error";
   const where = info.line ? ` (line ${info.line}${info.column ? `, col ${info.column}` : ""})` : "";
@@ -541,38 +609,61 @@ function showError(e) {
   scrollOut();
 }
 
-// Errors thrown later, from timers or event handlers created by user code
-window.addEventListener("error", (ev) => { if (fmt) showError(ev.error || ev.message); });
-window.addEventListener("unhandledrejection", (ev) => { if (fmt) showError(ev.reason); });
+addEventListener("message", (ev) => {
+  const m = ev.data;
+  if (!m || typeof m.t !== "string") return;
+  if (spare && ev.source === spare.contentWindow) {
+    if (m.t === "ready") spare.resolveReady();
+    if (m.t === "fatal") spare.rejectReady(new Error(m.message));
+    return;
+  }
+  // Anything from an iframe other than the current run's is ignored
+  if (!sandbox || ev.source !== sandbox.contentWindow) return;
+  switch (m.t) {
+    case "out": write(m.s, m.err ? "stderr" : "stdout"); break;
+    case "pending":
+      writeLine("Promise pending…", "note");
+      setStatus(`Running async… ${m.ms} ms`);
+      break;
+    case "result":
+      writeLine(m.s, "result");
+      setStatus(m.ms == null ? "Done" : `Done in ${m.ms} ms`, "ok");
+      break;
+    case "error":
+      showError(m.info);
+      if (m.final) setStatus("Error", "bad");
+      break;
+    case "height":
+      sandbox.style.height = m.h + "px";
+      sandbox.classList.toggle("has-content", m.h > 0);
+      break;
+    case "run": run(); break;
+  }
+});
 
-let runCount = 0;
-function run() {
-  if (!fmt) return;
+async function run() {
+  if (runBtn.disabled) return;
   const code = view.state.doc.toString();
-  const id = ++runCount;
   if (narrow.matches) { view.contentDOM.blur(); showView("output"); }
   clearOutput();
-  stageEl.replaceChildren();
   markErrorLine(null);
-  const t0 = performance.now();
+  stopSandbox();
+  sandbox = spare || makeSandbox();
+  spare = null;
+  sandbox.hidden = false;
+  const current = sandbox;
+  setStatus("Running…");
   try {
-    evalString("(in-ns 'user)");
-    const value = evalString(code);
-    const ms = Math.round(performance.now() - t0);
-    if (value instanceof Promise) {
-      writeLine("Promise pending…", "note");
-      setStatus(`Running async… ${ms} ms`);
-      value.then(
-        (v) => { writeLine(safeFmt(v), "result"); if (id === runCount) setStatus("Done", "ok"); },
-        (e) => { showError(e); if (id === runCount) setStatus("Error", "bad"); });
-    } else {
-      writeLine(safeFmt(value), "result");
-      setStatus(`Done in ${ms} ms`, "ok");
-    }
+    await current.ready;
   } catch (e) {
-    showError(e);
-    setStatus("Error", "bad");
+    setStatus("Scittle failed to load", "bad");
+    writeLine(e.message, "stderr");
+    return;
   }
+  if (current !== sandbox) return;  // another Run or Clear happened meanwhile
+  current.contentWindow.postMessage({ t: "eval", code }, "*");
+  // Prepare the next one once this run's synchronous part is likely done
+  setTimeout(() => { if (!spare) spare = makeSandbox(); }, 0);
 }
 
 // ---------------------------------------------------------------- editor
@@ -701,7 +792,11 @@ $("run-m").addEventListener("click", run);
 $("tab-code").addEventListener("click", () => showView("code"));
 $("tab-output").addEventListener("click", () => showView("output"));
 $("share").addEventListener("click", share);
-$("clear").addEventListener("click", () => { clearOutput(); stageEl.replaceChildren(); markErrorLine(null); });
+// Clear also stops the program (timers, intervals, listeners)
+$("clear").addEventListener("click", () => {
+  clearOutput(); markErrorLine(null);
+  if (sandbox) { stopSandbox(); setStatus("Stopped"); }
+});
 window.addEventListener("hashchange", loadFromHash);
 // Ctrl/Cmd+Enter also works when focus is outside the editor
 document.addEventListener("keydown", (e) => {
@@ -793,18 +888,14 @@ if (!(await loadFromHash())) {
   setCode(draft || EXAMPLES["Basics"]);
 }
 
-if (window.scittle) {
-  try {
-    bootScittle();
-    runBtn.disabled = $("run-m").disabled = false;
-    setStatus("Ready");
-  } catch (e) {
-    setStatus("Scittle failed to start", "bad");
-    writeLine(String(e), "stderr");
-  }
-} else {
+spare = makeSandbox();
+try {
+  await spare.ready;
+  runBtn.disabled = $("run-m").disabled = false;
+  setStatus("Ready");
+} catch (e) {
   setStatus("Scittle failed to load", "bad");
-  writeLine("Could not load Scittle from the CDN. Check your connection and reload.", "stderr");
+  writeLine(e.message, "stderr");
 }
 </script>
 </body>
