@@ -70,6 +70,9 @@
   }
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
   button:disabled { opacity: .5; cursor: progress; }
+  button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  #editor .cm-vim-panel { font-family: var(--mono); padding: 2px 8px; }
+  #editor .cm-vim-panel input { font: inherit; color: inherit; }
   kbd { font: 11px var(--mono); opacity: .8; }
   main {
     flex: 1;
@@ -135,7 +138,9 @@
     h1 { font-size: 15px; margin-right: 4px; flex-shrink: 0; }
     h1 small, header #run, .hide-sm { display: none; }
     header select { flex: 1; min-width: 0; min-height: 40px; }
-    header #share { min-height: 40px; }
+    header #share, header #vim-toggle { min-height: 40px; }
+    #editor .cm-vim-panel input { font-size: 16px; } /* no iOS focus zoom on ":" */
+    body:not(.vim) #keybar [data-act="esc"] { display: none; }
     main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
     body[data-view="code"] #pane-output,
     body[data-view="output"] #pane-editor { display: none; }
@@ -200,17 +205,21 @@
     "@marijn/find-cluster-break": "https://cdn.jsdelivr.net/npm/@marijn/find-cluster-break@1.0.4/src/index.js",
     "style-mod": "https://cdn.jsdelivr.net/npm/style-mod@4.1.4/src/style-mod.js",
     "w3c-keyname": "https://cdn.jsdelivr.net/npm/w3c-keyname@2.2.8/index.js",
-    "crelt": "https://cdn.jsdelivr.net/npm/crelt@1.0.7/index.js"
+    "crelt": "https://cdn.jsdelivr.net/npm/crelt@1.0.7/index.js",
+    "@codemirror/search": "https://cdn.jsdelivr.net/npm/@codemirror/search@6.7.2/dist/index.js",
+    "@replit/codemirror-vim": "https://cdn.jsdelivr.net/npm/@replit/codemirror-vim@6.4.0/dist/index.js",
+    "@replit/codemirror-vim-core": "https://cdn.jsdelivr.net/npm/@replit/codemirror-vim-core@0.1.0/vim.js"
   }
 }
 </script>
 </head>
 <body data-view="code">
 <header>
-  <h1>Clojure Playground <small>· Scittle 0.8.33</small></h1>
+  <h1>Clojure<span class="hide-sm"> Playground</span> <small>· Scittle 0.8.33</small></h1>
   <select id="examples" aria-label="Example snippets">
     <option value="" disabled selected>Examples…</option>
   </select>
+  <button id="vim-toggle" type="button" aria-pressed="false" title="Vim keybindings (jk = Esc, :w = Run)">Vim</button>
   <button id="share" type="button" title="Copy a link containing this code">Share</button>
   <button id="run" class="primary" type="button" disabled title="Run (Ctrl/Cmd+Enter)">
     Run <kbd class="hide-sm">Ctrl/⌘+Enter</kbd>
@@ -232,6 +241,7 @@
 </main>
 <!-- phone only: symbol keys shown while the editor has focus -->
 <div id="keybar" aria-label="Extra keys">
+  <button type="button" class="act" data-act="esc" title="Escape (normal mode)">Esc</button>
   <div class="keys" id="keys"></div>
   <button type="button" class="act" data-act="done" title="Hide keyboard" aria-label="Hide keyboard">⌄</button>
   <button type="button" class="primary run" data-act="run">▶ Run</button>
@@ -694,6 +704,7 @@ const themeConf = new Compartment();
 const themeFor = (dark) => dark ? oneDark : syntaxHighlighting(defaultHighlightStyle, { fallback: true });
 
 const wrapConf = new Compartment();
+const vimConf = new Compartment();
 
 const DRAFT_KEY = "clojure-playground:draft";
 let saveTimer;
@@ -708,6 +719,7 @@ const view = new EditorView({
   state: EditorState.create({
     doc: "",
     extensions: [
+      vimConf.of([]),   // must precede the other keymaps
       Prec.highest(keymap.of([{ key: "Mod-Enter", run: () => { run(); return true; } }])),
       lineNumbers(), highlightActiveLineGutter(), highlightActiveLine(),
       history(), drawSelection(), indentOnInput(), bracketMatching(), closeBrackets(),
@@ -827,10 +839,12 @@ addEventListener("orientationchange", () => { fullH = 0; });
 narrow.addEventListener("change", fitViewport);
 fitViewport();
 
-view.contentDOM.addEventListener("focus", () => {
+// focusin/out on the whole editor so that Vim's ":" prompt counts as typing too
+$("editor").addEventListener("focusin", () => {
   if (narrow.matches && coarse.matches) document.body.classList.add("typing");
 });
-view.contentDOM.addEventListener("blur", () => {
+$("editor").addEventListener("focusout", (e) => {
+  if ($("editor").contains(e.relatedTarget)) return;
   document.body.classList.remove("typing");
   keyboardSeen = false;
 });
@@ -849,7 +863,21 @@ for (const k of KEYS) {
   $("keys").append(b);
 }
 
+// In Vim normal/visual mode the extra keys go through Vim, so "(" is a motion,
+// ↶ is "u", and so on. Insert mode behaves like plain editing.
+const VIM_NORMAL = { "←": "h", "→": "l", "↶": "u", "↷": "<C-r>", "⇥": "==", "<": "<lt>" };
 function pressKey(k) {
+  const cm = vimMod && vimOn ? vimMod.getCM(view) : null;
+  const vs = cm?.state.vim;
+  if (vs && !vs.insertMode) {
+    let keys = VIM_NORMAL[k] ?? k;
+    if (vs.visualMode) {
+      if (k === "⇥") keys = "=";
+      if (k === "⤢") keys = "a(";
+    } else if (k === "⤢") keys = "va(";
+    for (const key of keys.match(/<[^>]+>|./g)) vimMod.Vim.handleKey(cm, key, "user");
+    return;
+  }
   if (ACTIONS[k]) { ACTIONS[k][0](view); return; }
   // insertBracket gives the same auto-pairing / skip-over as typing the key
   const tr = "([{\")]}".includes(k) && insertBracket(view.state, k);
@@ -879,8 +907,43 @@ $("keybar").addEventListener("click", (e) => {
   if (!b) return;
   if (b.dataset.act === "run") return run();
   if (b.dataset.act === "done") return view.contentDOM.blur();
+  if (b.dataset.act === "esc") return vimMod?.Vim.handleKey(vimMod.getCM(view), "<Esc>", "user");
   if (!isArrow(b.dataset.key)) pressKey(b.dataset.key);
 });
+
+// ------------------------------------------------------------------- vim
+// Loaded on demand, so the default (off) costs nothing.
+const VIM_KEY = "clojure-playground:vim";
+let vimMod = null, vimOn = false;
+async function setVim(on) {
+  const btn = $("vim-toggle");
+  if (on && !vimMod) {
+    btn.disabled = true;
+    try {
+      vimMod = await import("@replit/codemirror-vim");
+      const { Vim } = vimMod;
+      Vim.defineEx("write", "w", () => run());
+      Vim.defineEx("share", "sh", () => share());
+      Vim.map("jk", "<Esc>", "insert");
+    } catch (e) {
+      toast("Could not load Vim mode");
+      on = false;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  vimOn = on;
+  view.dispatch({ effects: vimConf.reconfigure(on ? vimMod.vim({ status: true }) : []) });
+  btn.setAttribute("aria-pressed", on);
+  document.body.classList.toggle("vim", on);
+  try { localStorage.setItem(VIM_KEY, on ? "1" : ""); } catch {}
+}
+$("vim-toggle").addEventListener("click", async () => {
+  await setVim(!vimOn);
+  toast(vimOn ? "Vim on · jk / Esc = normal mode · :w = Run · :sh = Share" : "Vim off");
+  if (!narrow.matches) view.focus();   // on phones this would pop up the keyboard
+});
+try { if (localStorage.getItem(VIM_KEY)) setVim(true); } catch {}
 
 if (!(await loadFromHash())) {
   let draft = null;
